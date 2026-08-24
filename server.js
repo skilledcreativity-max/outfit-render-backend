@@ -24,21 +24,18 @@ app.use('/renders', express.static(RENDER_DIR));
 const TEMPLATE_WIDTH = 585;
 const TEMPLATE_HEIGHT = 559;
 
-// Confirmed from Roblox's official docs (create.roblox.com/docs/en-us/avatar/classic-clothing):
-//   Front / Back panels  : 128 x 128
-//   Torso & arm sides    : 64 x 128
-//   Up / Down panels     : 128 x 64
-//   Arm/leg caps         : 64 x 64
-// Roblox's docs give panel SIZES but not their exact x/y offsets on the canvas — those
-// live inside the official template file itself. Download it here and use it as your
-// true source of truth for exact placement:
-//   https://create.roblox.com/docs/assets/accessories/classic-clothing/Classic-Clothing-Templates.zip
-// The box below is a reasonable approximation of the FRONT panel's position, good enough
-// for a solid base color (which covers every panel identically), but you should verify
-// it against the real official template before relying on exact chest-graphic placement —
-// open the downloaded template in an image editor, check the FRONT square's pixel
-// coordinates, and update x/y/w/h here to match exactly.
-const CHEST_REGION = { x: 195, y: 140, w: 195, h: 195 };
+// Derived exactly from Roblox's official template (create.roblox.com/docs/en-us/avatar/classic-clothing):
+// panel sizes are Front/Back 128x128, torso sides (R/L) 64x128, Up/Down 128x64.
+// The torso row reads left-to-right as R | FRONT | L | BACK (64+128+64+128 = 384px),
+// centered in the 585px canvas (100.5px margin each side), with UP/DOWN stacked directly
+// above/below FRONT. This gives FRONT's exact bounding box — no guessing required:
+//   R:    x=100, y=64,  w=64,  h=128
+//   FRONT: x=164, y=64,  w=128, h=128   <- used below for the chest graphic
+//   L:    x=292, y=64,  w=64,  h=128
+//   BACK:  x=356, y=64,  w=128, h=128
+//   UP:    x=164, y=0,   w=128, h=64
+//   DOWN:  x=164, y=192, w=128, h=64
+const CHEST_REGION = { x: 164, y: 64, w: 128, h: 128 };
 
 async function fetchRobloxAssetImage(assetId) {
 	if (!assetId) return null;
