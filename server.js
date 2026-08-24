@@ -42,10 +42,20 @@ const CHEST_REGION = { x: 195, y: 140, w: 195, h: 195 };
 
 async function fetchRobloxAssetImage(assetId) {
 	if (!assetId) return null;
-	// assetdelivery serves the raw image bytes for texture/decal-type assets.
-	const url = `https://assetdelivery.roblox.com/v1/asset/?id=${assetId}`;
-	const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 10000 });
-	return Jimp.read(Buffer.from(response.data));
+
+	// Roblox now blocks direct, unauthenticated asset downloads (assetdelivery.roblox.com
+	// returns 401/403 for server-to-server requests). The public workaround is the
+	// Thumbnails API, which returns a usable rendered-image URL without authentication.
+	const thumbUrl = `https://thumbnails.roblox.com/v1/assets?assetIds=${assetId}&size=420x420&format=Png`;
+	const thumbResponse = await axios.get(thumbUrl, { timeout: 10000 });
+
+	const entry = thumbResponse.data && thumbResponse.data.data && thumbResponse.data.data[0];
+	if (!entry || entry.state !== 'Completed' || !entry.imageUrl) {
+		throw new Error(`Thumbnail not available for asset ${assetId} (state: ${entry && entry.state})`);
+	}
+
+	const imageResponse = await axios.get(entry.imageUrl, { responseType: 'arraybuffer', timeout: 10000 });
+	return Jimp.read(Buffer.from(imageResponse.data));
 }
 
 app.post('/render', async (req, res) => {
