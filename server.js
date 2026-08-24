@@ -1,9 +1,6 @@
 // Outfit Studio render backend
-// Takes a design (base color hex, Roblox pattern asset id, Roblox graphic asset id)
-// and composites it into a real 585x559 PNG shirt template that players can download.
-//
-// Deploy this somewhere with a public URL (see README.md), then point your Roblox
-// ServerScript's RENDER_API_URL at it.
+// Takes a design (base color hex, Roblox pattern asset id, Roblox graphic asset id, sleeve/pant type)
+// and composites it into a real 585x559 PNG classic clothing template with accurate UV coordinates and transparency.
 
 const express = require('express');
 const Jimp = require('jimp');
@@ -16,7 +13,9 @@ app.use(express.json({ limit: '2mb' }));
 
 const PORT = process.env.PORT || 3000;
 const RENDER_DIR = path.join(__dirname, 'renders');
-if (!fs.existsSync(RENDER_DIR)) fs.mkdirSync(RENDER_DIR);
+if (!fs.existsSync(RENDER_DIR)) {
+	fs.mkdirSync(RENDER_DIR, { recursive: true });
+}
 
 // Serve finished PNGs statically at /renders/<code>.png
 app.use('/renders', express.static(RENDER_DIR));
@@ -24,27 +23,41 @@ app.use('/renders', express.static(RENDER_DIR));
 const TEMPLATE_WIDTH = 585;
 const TEMPLATE_HEIGHT = 559;
 
-// Derived exactly from Roblox's official template (create.roblox.com/docs/en-us/avatar/classic-clothing):
-// panel sizes are Front/Back 128x128, torso sides (R/L) 64x128, Up/Down 128x64.
-// The torso row reads left-to-right as R | FRONT | L | BACK (64+128+64+128 = 384px),
-// centered in the 585px canvas (100.5px margin each side), with UP/DOWN stacked directly
-// above/below FRONT. This gives FRONT's exact bounding box — no guessing required:
-//   R:    x=100, y=64,  w=64,  h=128
-//   FRONT: x=164, y=64,  w=128, h=128   <- used below for the chest graphic
-//   L:    x=292, y=64,  w=64,  h=128
-//   BACK:  x=356, y=64,  w=128, h=128
-//   UP:    x=164, y=0,   w=128, h=64
-//   DOWN:  x=164, y=192, w=128, h=64
-const CHEST_REGION = { x: 164, y: 64, w: 128, h: 128 };
+// Official Roblox Classic Clothing Template UV Coordinate Boxes (585 x 559)
+const UV_PANELS = {
+	// Torso Panels (128x128 front/back, 64x128 sides, 128x64 top/bottom)
+	TORSO_TOP:    { x: 164, y: 0,   w: 128, h: 64 },
+	TORSO_BOTTOM: { x: 164, y: 192, w: 128, h: 64 },
+	TORSO_RIGHT:  { x: 100, y: 64,  w: 64,  h: 128 },
+	TORSO_FRONT:  { x: 164, y: 64,  w: 128, h: 128 },
+	TORSO_LEFT:   { x: 292, y: 64,  w: 64,  h: 128 },
+	TORSO_BACK:   { x: 356, y: 64,  w: 128, h: 128 },
+
+	// Right Arm / Leg (x: 0..256, y: 284..540)
+	R_TOP:        { x: 64,  y: 284, w: 64,  h: 64 },
+	R_BOTTOM:     { x: 64,  y: 476, w: 64,  h: 64 },
+	R_RIGHT:      { x: 0,   y: 348, w: 64,  h: 128 },
+	R_FRONT:      { x: 64,  y: 348, w: 64,  h: 128 },
+	R_LEFT:       { x: 128, y: 348, w: 64,  h: 128 },
+	R_BACK:       { x: 192, y: 348, w: 64,  h: 128 },
+
+	// Left Arm / Leg (x: 292..548, y: 284..540)
+	L_TOP:        { x: 356, y: 284, w: 64,  h: 64 },
+	L_BOTTOM:     { x: 356, y: 476, w: 64,  h: 64 },
+	L_RIGHT:      { x: 292, y: 348, w: 64,  h: 128 },
+	L_FRONT:      { x: 356, y: 348, w: 64,  h: 128 },
+	L_LEFT:       { x: 420, y: 348, w: 64,  h: 128 },
+	L_BACK:       { x: 484, y: 348, w: 64,  h: 128 },
+};
+
+function fillRectOnCanvas(canvas, rect, hexColor) {
+	const block = new Jimp(rect.w, rect.h, hexColor);
+	canvas.composite(block, rect.x, rect.y);
+}
 
 async function fetchRobloxAssetImage(assetId) {
 	if (!assetId) return null;
 
-	// Roblox now blocks direct, unauthenticated asset downloads (assetdelivery.roblox.com
-	// returns 401/403 for server-to-server requests). The public workaround is the
-	// Thumbnails API, which returns a usable rendered-image URL without authentication.
-	// On a thumbnail's very first request, Roblox generates it asynchronously and
-	// returns state "Pending" — so we retry a few times with a short delay.
 	const thumbUrl = `https://thumbnails.roblox.com/v1/assets?assetIds=${assetId}&size=420x420&format=Png`;
 	const maxAttempts = 4;
 	const delayMs = 1500;
@@ -73,40 +86,118 @@ async function fetchRobloxAssetImage(assetId) {
 
 app.post('/render', async (req, res) => {
 	try {
-		const { exportCode, clothingType, baseColorHex, patternAssetId, graphicAssetId } = req.body;
+		const { exportCode, clothingType, sleeveType, baseColorHex, patternAssetId, graphicAssetId } = req.body;
 		const isPants = clothingType === 'Pants';
+		const sleeve = sleeveType || 'Long';
 
 		if (!exportCode || !baseColorHex) {
 			return res.status(400).json({ success: false, message: 'Missing exportCode or baseColorHex.' });
 		}
 
-		const canvas = new Jimp(TEMPLATE_WIDTH, TEMPLATE_HEIGHT, baseColorHex);
+		// Initialize 585x559 canvas with full alpha transparency
+		const canvas = new Jimp(TEMPLATE_WIDTH, TEMPLATE_HEIGHT, 0x00000000);
 
+		// Determine active UV panels based on Clothing Type and Sleeves/Shorts
+		const activePanels = [];
+
+		if (!isPants) {
+			// Shirt: Torso panels are always active
+			activePanels.push(
+				UV_PANELS.TORSO_TOP,
+				UV_PANELS.TORSO_BOTTOM,
+				UV_PANELS.TORSO_RIGHT,
+				UV_PANELS.TORSO_FRONT,
+				UV_PANELS.TORSO_LEFT,
+				UV_PANELS.TORSO_BACK
+			);
+
+			if (sleeve === 'Long') {
+				// Full arms + bottom cuffs
+				activePanels.push(
+					UV_PANELS.R_TOP, UV_PANELS.R_BOTTOM, UV_PANELS.R_RIGHT, UV_PANELS.R_FRONT, UV_PANELS.R_LEFT, UV_PANELS.R_BACK,
+					UV_PANELS.L_TOP, UV_PANELS.L_BOTTOM, UV_PANELS.L_RIGHT, UV_PANELS.L_FRONT, UV_PANELS.L_LEFT, UV_PANELS.L_BACK
+				);
+			} else if (sleeve === 'Short') {
+				// Short arms (64px height) without bottom cuffs so avatar skin is visible
+				activePanels.push(
+					UV_PANELS.R_TOP,
+					{ x: UV_PANELS.R_RIGHT.x, y: UV_PANELS.R_RIGHT.y, w: 64, h: 64 },
+					{ x: UV_PANELS.R_FRONT.x, y: UV_PANELS.R_FRONT.y, w: 64, h: 64 },
+					{ x: UV_PANELS.R_LEFT.x,  y: UV_PANELS.R_LEFT.y,  w: 64, h: 64 },
+					{ x: UV_PANELS.R_BACK.x,  y: UV_PANELS.R_BACK.y,  w: 64, h: 64 },
+					UV_PANELS.L_TOP,
+					{ x: UV_PANELS.L_RIGHT.x, y: UV_PANELS.L_RIGHT.y, w: 64, h: 64 },
+					{ x: UV_PANELS.L_FRONT.x, y: UV_PANELS.L_FRONT.y, w: 64, h: 64 },
+					{ x: UV_PANELS.L_LEFT.x,  y: UV_PANELS.L_LEFT.y,  w: 64, h: 64 },
+					{ x: UV_PANELS.L_BACK.x,  y: UV_PANELS.L_BACK.y,  w: 64, h: 64 }
+				);
+			}
+			// Sleeveless: Arms remain 100% transparent
+		} else {
+			// Pants: Waistband / pelvis + legs
+			activePanels.push(
+				UV_PANELS.TORSO_BOTTOM,
+				{ x: UV_PANELS.TORSO_RIGHT.x, y: UV_PANELS.TORSO_RIGHT.y + 64, w: 64, h: 64 },
+				{ x: UV_PANELS.TORSO_FRONT.x, y: UV_PANELS.TORSO_FRONT.y + 64, w: 128, h: 64 },
+				{ x: UV_PANELS.TORSO_LEFT.x,  y: UV_PANELS.TORSO_LEFT.y + 64,  w: 64, h: 64 },
+				{ x: UV_PANELS.TORSO_BACK.x,  y: UV_PANELS.TORSO_BACK.y + 64,  w: 128, h: 64 }
+			);
+
+			if (sleeve === 'Shorts') {
+				// Shorts (64px height) without bottom cuffs
+				activePanels.push(
+					UV_PANELS.R_TOP,
+					{ x: UV_PANELS.R_RIGHT.x, y: UV_PANELS.R_RIGHT.y, w: 64, h: 64 },
+					{ x: UV_PANELS.R_FRONT.x, y: UV_PANELS.R_FRONT.y, w: 64, h: 64 },
+					{ x: UV_PANELS.R_LEFT.x,  y: UV_PANELS.R_LEFT.y,  w: 64, h: 64 },
+					{ x: UV_PANELS.R_BACK.x,  y: UV_PANELS.R_BACK.y,  w: 64, h: 64 },
+					UV_PANELS.L_TOP,
+					{ x: UV_PANELS.L_RIGHT.x, y: UV_PANELS.L_RIGHT.y, w: 64, h: 64 },
+					{ x: UV_PANELS.L_FRONT.x, y: UV_PANELS.L_FRONT.y, w: 64, h: 64 },
+					{ x: UV_PANELS.L_LEFT.x,  y: UV_PANELS.L_LEFT.y,  w: 64, h: 64 },
+					{ x: UV_PANELS.L_BACK.x,  y: UV_PANELS.L_BACK.y,  w: 64, h: 64 }
+				);
+			} else {
+				// Full length pants
+				activePanels.push(
+					UV_PANELS.R_TOP, UV_PANELS.R_BOTTOM, UV_PANELS.R_RIGHT, UV_PANELS.R_FRONT, UV_PANELS.R_LEFT, UV_PANELS.R_BACK,
+					UV_PANELS.L_TOP, UV_PANELS.L_BOTTOM, UV_PANELS.L_RIGHT, UV_PANELS.L_FRONT, UV_PANELS.L_LEFT, UV_PANELS.L_BACK
+				);
+			}
+		}
+
+		// 1. Paint base color strictly inside active UV panels
+		for (const panel of activePanels) {
+			fillRectOnCanvas(canvas, panel, baseColorHex);
+		}
+
+		// 2. Composite optional pattern texture masked to active panels
 		if (patternAssetId) {
 			try {
 				const patternImg = await fetchRobloxAssetImage(patternAssetId);
 				if (patternImg) {
 					patternImg.resize(TEMPLATE_WIDTH, TEMPLATE_HEIGHT);
-					canvas.composite(patternImg, 0, 0, {
-						mode: Jimp.BLEND_MULTIPLY,
-						opacitySource: 0.85,
-						opacityDest: 1,
-					});
+					for (const panel of activePanels) {
+						const crop = patternImg.clone().crop(panel.x, panel.y, panel.w, panel.h);
+						canvas.composite(crop, panel.x, panel.y, {
+							mode: Jimp.BLEND_MULTIPLY,
+							opacitySource: 0.85,
+							opacityDest: 1,
+						});
+					}
 				}
 			} catch (err) {
 				console.warn(`Pattern asset ${patternAssetId} failed to load: ${err.message}`);
-				// Non-fatal: continue rendering without the pattern layer.
 			}
 		}
 
-		// Chest graphics only make sense on the front-torso panel of a Shirt — pants
-		// have no equivalent single "front and center" spot in this tool, so skip it.
+		// 3. Composite chest graphic onto front torso panel
 		if (!isPants && graphicAssetId) {
 			try {
 				const graphicImg = await fetchRobloxAssetImage(graphicAssetId);
 				if (graphicImg) {
-					graphicImg.contain(CHEST_REGION.w, CHEST_REGION.h);
-					canvas.composite(graphicImg, CHEST_REGION.x, CHEST_REGION.y);
+					graphicImg.contain(UV_PANELS.TORSO_FRONT.w - 16, UV_PANELS.TORSO_FRONT.h - 16);
+					canvas.composite(graphicImg, UV_PANELS.TORSO_FRONT.x + 8, UV_PANELS.TORSO_FRONT.y + 8);
 				}
 			} catch (err) {
 				console.warn(`Graphic asset ${graphicAssetId} failed to load: ${err.message}`);
