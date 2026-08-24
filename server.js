@@ -46,12 +46,28 @@ async function fetchRobloxAssetImage(assetId) {
 	// Roblox now blocks direct, unauthenticated asset downloads (assetdelivery.roblox.com
 	// returns 401/403 for server-to-server requests). The public workaround is the
 	// Thumbnails API, which returns a usable rendered-image URL without authentication.
+	// On a thumbnail's very first request, Roblox generates it asynchronously and
+	// returns state "Pending" — so we retry a few times with a short delay.
 	const thumbUrl = `https://thumbnails.roblox.com/v1/assets?assetIds=${assetId}&size=420x420&format=Png`;
-	const thumbResponse = await axios.get(thumbUrl, { timeout: 10000 });
+	const maxAttempts = 4;
+	const delayMs = 1500;
 
-	const entry = thumbResponse.data && thumbResponse.data.data && thumbResponse.data.data[0];
+	let entry = null;
+	for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+		const thumbResponse = await axios.get(thumbUrl, { timeout: 10000 });
+		entry = thumbResponse.data && thumbResponse.data.data && thumbResponse.data.data[0];
+
+		if (entry && entry.state === 'Completed' && entry.imageUrl) {
+			break;
+		}
+
+		if (attempt < maxAttempts) {
+			await new Promise((resolve) => setTimeout(resolve, delayMs));
+		}
+	}
+
 	if (!entry || entry.state !== 'Completed' || !entry.imageUrl) {
-		throw new Error(`Thumbnail not available for asset ${assetId} (state: ${entry && entry.state})`);
+		throw new Error(`Thumbnail not available for asset ${assetId} after ${maxAttempts} attempts (state: ${entry && entry.state})`);
 	}
 
 	const imageResponse = await axios.get(entry.imageUrl, { responseType: 'arraybuffer', timeout: 10000 });
