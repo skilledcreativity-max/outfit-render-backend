@@ -24,11 +24,20 @@ app.use('/renders', express.static(RENDER_DIR));
 const TEMPLATE_WIDTH = 585;
 const TEMPLATE_HEIGHT = 559;
 
-// Approximate front-chest region on the classic Roblox shirt template.
-// NOTE: this is a reasonable default, not pixel-perfect. For a professional result,
-// download Roblox's official blank shirt template (from the create.roblox.com upload
-// page) and use it as the base image instead of a flat color canvas — then these
-// coordinates will line up exactly with the real front-torso quad.
+// Confirmed from Roblox's official docs (create.roblox.com/docs/en-us/avatar/classic-clothing):
+//   Front / Back panels  : 128 x 128
+//   Torso & arm sides    : 64 x 128
+//   Up / Down panels     : 128 x 64
+//   Arm/leg caps         : 64 x 64
+// Roblox's docs give panel SIZES but not their exact x/y offsets on the canvas — those
+// live inside the official template file itself. Download it here and use it as your
+// true source of truth for exact placement:
+//   https://create.roblox.com/docs/assets/accessories/classic-clothing/Classic-Clothing-Templates.zip
+// The box below is a reasonable approximation of the FRONT panel's position, good enough
+// for a solid base color (which covers every panel identically), but you should verify
+// it against the real official template before relying on exact chest-graphic placement —
+// open the downloaded template in an image editor, check the FRONT square's pixel
+// coordinates, and update x/y/w/h here to match exactly.
 const CHEST_REGION = { x: 195, y: 140, w: 195, h: 195 };
 
 async function fetchRobloxAssetImage(assetId) {
