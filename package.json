@@ -1,0 +1,14 @@
+{
+  "name": "outfit-render-backend",
+  "version": "1.0.0",
+  "description": "Composites Roblox Outfit Studio designs into downloadable PNG shirt templates.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "jimp": "^0.22.12",
+    "axios": "^1.7.2"
+  }
+}
