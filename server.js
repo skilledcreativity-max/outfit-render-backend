@@ -73,7 +73,8 @@ async function fetchRobloxAssetImage(assetId) {
 
 app.post('/render', async (req, res) => {
 	try {
-		const { exportCode, baseColorHex, patternAssetId, graphicAssetId } = req.body;
+		const { exportCode, clothingType, baseColorHex, patternAssetId, graphicAssetId } = req.body;
+		const isPants = clothingType === 'Pants';
 
 		if (!exportCode || !baseColorHex) {
 			return res.status(400).json({ success: false, message: 'Missing exportCode or baseColorHex.' });
@@ -98,7 +99,9 @@ app.post('/render', async (req, res) => {
 			}
 		}
 
-		if (graphicAssetId) {
+		// Chest graphics only make sense on the front-torso panel of a Shirt — pants
+		// have no equivalent single "front and center" spot in this tool, so skip it.
+		if (!isPants && graphicAssetId) {
 			try {
 				const graphicImg = await fetchRobloxAssetImage(graphicAssetId);
 				if (graphicImg) {
