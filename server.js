@@ -36,31 +36,31 @@ const TEMPLATE_OVERLAYS = {
 	Pants: 'https://static.wikia.nocookie.net/roblox/images/0/07/Template-Pants-R15_07072020.png',
 };
 
-// Official Roblox R15 Template UV Coordinates (585 x 559)
+// Official Roblox R15 Template Pixel-Perfect UV Coordinates (585 x 559)
 const UV_PANELS = {
-	// Torso (Top starts at Y: 74, Body row at Y: 138, Bottom at Y: 266)
-	TORSO_TOP:    { x: 231, y: 74,  w: 128, h: 64 },
-	TORSO_RIGHT:  { x: 167, y: 138, w: 64,  h: 128 },
-	TORSO_FRONT:  { x: 231, y: 138, w: 128, h: 128 },
-	TORSO_LEFT:   { x: 359, y: 138, w: 64,  h: 128 },
-	TORSO_BACK:   { x: 423, y: 138, w: 128, h: 128 },
-	TORSO_BOTTOM: { x: 231, y: 266, w: 128, h: 64 },
+	// Torso (Seamless Y span: 28 -> 92 -> 220 -> 284)
+	TORSO_TOP:    { x: 231, y: 28,  w: 128, h: 64 },
+	TORSO_RIGHT:  { x: 167, y: 92,  w: 64,  h: 128 },
+	TORSO_FRONT:  { x: 231, y: 92,  w: 128, h: 128 },
+	TORSO_LEFT:   { x: 359, y: 92,  w: 64,  h: 128 },
+	TORSO_BACK:   { x: 423, y: 92,  w: 128, h: 128 },
+	TORSO_BOTTOM: { x: 231, y: 220, w: 128, h: 64 },
 
-	// Right Arm / Right Leg (Top U at Y: 334, Arm row at Y: 398, Bottom D at Y: 526)
-	R_TOP:        { x: 231, y: 334, w: 64,  h: 64 },
-	R_RIGHT:      { x: 21,  y: 398, w: 64,  h: 128 },
-	R_FRONT:      { x: 85,  y: 398, w: 64,  h: 128 },
-	R_LEFT:       { x: 149, y: 398, w: 64,  h: 128 },
-	R_BACK:       { x: 213, y: 398, w: 64,  h: 128 },
-	R_BOTTOM:     { x: 213, y: 526, w: 64,  h: 33 },
+	// Right Arm / Right Leg (Seamless Y span: 284 -> 348 -> 476 -> 540)
+	R_TOP:        { x: 213, y: 284, w: 64,  h: 64 },
+	R_RIGHT:      { x: 21,  y: 348, w: 64,  h: 128 },
+	R_FRONT:      { x: 85,  y: 348, w: 64,  h: 128 },
+	R_LEFT:       { x: 149, y: 348, w: 64,  h: 128 },
+	R_BACK:       { x: 213, y: 348, w: 64,  h: 128 },
+	R_BOTTOM:     { x: 213, y: 476, w: 64,  h: 64 },
 
-	// Left Arm / Left Leg (Top U at Y: 334, Arm row at Y: 398, Bottom D at Y: 526)
-	L_TOP:        { x: 295, y: 334, w: 64,  h: 64 },
-	L_RIGHT:      { x: 277, y: 398, w: 64,  h: 128 },
-	L_FRONT:      { x: 341, y: 398, w: 64,  h: 128 },
-	L_LEFT:       { x: 405, y: 398, w: 64,  h: 128 },
-	L_BACK:       { x: 469, y: 398, w: 64,  h: 128 },
-	L_BOTTOM:     { x: 277, y: 526, w: 64,  h: 33 },
+	// Left Arm / Left Leg (Seamless Y span: 284 -> 348 -> 476 -> 540)
+	L_TOP:        { x: 277, y: 284, w: 64,  h: 64 },
+	L_RIGHT:      { x: 277, y: 348, w: 64,  h: 128 },
+	L_FRONT:      { x: 341, y: 348, w: 64,  h: 128 },
+	L_LEFT:       { x: 405, y: 348, w: 64,  h: 128 },
+	L_BACK:       { x: 469, y: 348, w: 64,  h: 128 },
+	L_BOTTOM:     { x: 277, y: 476, w: 64,  h: 64 },
 };
 
 function fillRectOnCanvas(canvas, rect, hexColor) {
