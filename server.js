@@ -95,6 +95,115 @@ function drawCircle(image, cx, cy, radius, hexColor, isEraser = false) {
 	}
 }
 
+// Interpolates smooth lines between mouse/touch stroke points without gaps
+function drawLine(image, x0, y0, x1, y1, radius, hexColor, isEraser = false) {
+	const dx = x1 - x0;
+	const dy = y1 - y0;
+	const distance = Math.hypot(dx, dy);
+	const steps = Math.max(1, Math.ceil(distance / Math.max(1, radius / 2)));
+
+	for (let i = 0; i <= steps; i++) {
+		const t = i / steps;
+		const x = Math.round(x0 + dx * t);
+		const y = Math.round(y0 + dy * t);
+		drawCircle(image, x, y, radius, hexColor, isEraser);
+	}
+}
+
+// Rasterizes solid filled rectangles
+function drawFilledRect(image, x, y, w, h, hexColor) {
+	let color;
+	try {
+		color = Jimp.cssColorToHex(hexColor);
+	} catch {
+		color = 0xFFFFFFFF;
+	}
+	const startX = Math.max(0, Math.floor(x));
+	const startY = Math.max(0, Math.floor(y));
+	const endX = Math.min(TEMPLATE_WIDTH, Math.floor(x + w));
+	const endY = Math.min(TEMPLATE_HEIGHT, Math.floor(y + h));
+
+	for (let py = startY; py < endY; py++) {
+		for (let px = startX; px < endX; px++) {
+			image.setPixelColor(color, px, py);
+		}
+	}
+}
+
+// Rasterizes solid filled circles and ellipses
+function drawFilledCircleOrEllipse(image, x, y, w, h, hexColor) {
+	let color;
+	try {
+		color = Jimp.cssColorToHex(hexColor);
+	} catch {
+		color = 0xFFFFFFFF;
+	}
+	const rx = w / 2;
+	const ry = h / 2;
+	if (rx <= 0 || ry <= 0) return;
+	const cx = x + rx;
+	const cy = y + ry;
+
+	const startX = Math.max(0, Math.floor(x));
+	const startY = Math.max(0, Math.floor(y));
+	const endX = Math.min(TEMPLATE_WIDTH, Math.ceil(x + w));
+	const endY = Math.min(TEMPLATE_HEIGHT, Math.ceil(y + h));
+
+	for (let py = startY; py < endY; py++) {
+		for (let px = startX; px < endX; px++) {
+			const dx = (px - cx + 0.5) / rx;
+			const dy = (py - cy + 0.5) / ry;
+			if (dx * dx + dy * dy <= 1) {
+				image.setPixelColor(color, px, py);
+			}
+		}
+	}
+}
+
+// Rasterizes rounded rectangles
+function drawFilledRoundedRect(image, x, y, w, h, hexColor, radius = 14) {
+	let color;
+	try {
+		color = Jimp.cssColorToHex(hexColor);
+	} catch {
+		color = 0xFFFFFFFF;
+	}
+	const r = Math.min(radius, Math.floor(w / 2), Math.floor(h / 2));
+	const rSq = r * r;
+
+	const startX = Math.max(0, Math.floor(x));
+	const startY = Math.max(0, Math.floor(y));
+	const endX = Math.min(TEMPLATE_WIDTH, Math.floor(x + w));
+	const endY = Math.min(TEMPLATE_HEIGHT, Math.floor(y + h));
+
+	for (let py = startY; py < endY; py++) {
+		for (let px = startX; px < endX; px++) {
+			let inside = true;
+			if (px < x + r && py < y + r) {
+				const dx = px - (x + r);
+				const dy = py - (y + r);
+				if (dx * dx + dy * dy > rSq) inside = false;
+			} else if (px >= x + w - r && py < y + r) {
+				const dx = px - (x + w - r);
+				const dy = py - (y + r);
+				if (dx * dx + dy * dy > rSq) inside = false;
+			} else if (px < x + r && py >= y + h - r) {
+				const dx = px - (x + r);
+				const dy = py - (y + h - r);
+				if (dx * dx + dy * dy > rSq) inside = false;
+			} else if (px >= x + w - r && py >= y + h - r) {
+				const dx = px - (x + w - r);
+				const dy = py - (y + h - r);
+				if (dx * dx + dy * dy > rSq) inside = false;
+			}
+
+			if (inside) {
+				image.setPixelColor(color, px, py);
+			}
+		}
+	}
+}
+
 // Fetches asset images from the Roblox Thumbnails API (with retry logic)
 async function fetchRobloxAssetImage(assetId) {
 	if (!assetId) return null;
@@ -272,14 +381,60 @@ app.post('/render', async (req, res) => {
 			}
 		}
 
-		// 4. Render all user custom drawings and paint strokes directly onto the template
+		// 4. Render all user custom shapes (Rect, Circle, Rounded) and freehand brush strokes
 		if (Array.isArray(drawingStrokes)) {
 			for (const stroke of drawingStrokes) {
-				if (!stroke.points || !Array.isArray(stroke.points)) continue;
-				const isEraser = stroke.tool === 'Eraser';
-				const radius = Math.max(1, Math.floor((stroke.size || 6) / 2));
-				for (const pt of stroke.points) {
-					drawCircle(canvas, pt.x, pt.y, radius, stroke.colorHex, isEraser);
+				const tool = stroke.tool || stroke.shape;
+
+				if (tool === 'Rectangle') {
+					drawFilledRect(canvas, stroke.x, stroke.y, stroke.width, stroke.height, stroke.colorHex);
+				} else if (tool === 'Circle') {
+					drawFilledCircleOrEllipse(canvas, stroke.x, stroke.y, stroke.width, stroke.height, stroke.colorHex);
+				} else if (tool === 'Rounded') {
+					drawFilledRoundedRect(canvas, stroke.x, stroke.y, stroke.width, stroke.height, stroke.colorHex, 14);
+				} else if (tool === 'Brush' || tool === 'Eraser') {
+					if (!stroke.points || !Array.isArray(stroke.points)) continue;
+					const isEraser = tool === 'Eraser';
+					const radius = Math.max(1, Math.floor((stroke.size || 6) / 2));
+					if (stroke.points.length === 1) {
+						drawCircle(canvas, stroke.points[0].x, stroke.points[0].y, radius, stroke.colorHex, isEraser);
+					} else {
+						for (let i = 0; i < stroke.points.length - 1; i++) {
+							drawLine(
+								canvas,
+								stroke.points[i].x,
+								stroke.points[i].y,
+								stroke.points[i + 1].x,
+								stroke.points[i + 1].y,
+								radius,
+								stroke.colorHex,
+								isEraser
+							);
+						}
+					}
+				}
+
+				// If shape had an applied texture pattern, composite it over the shape bounds
+				if (stroke.patternAssetId && (tool === 'Rectangle' || tool === 'Circle' || tool === 'Rounded')) {
+					try {
+						const patImg = await fetchRobloxAssetImage(stroke.patternAssetId);
+						if (patImg) {
+							patImg.resize(TEMPLATE_WIDTH, TEMPLATE_HEIGHT);
+							const crop = patImg.clone().crop(
+								Math.max(0, stroke.x),
+								Math.max(0, stroke.y),
+								Math.min(TEMPLATE_WIDTH - stroke.x, stroke.width),
+								Math.min(TEMPLATE_HEIGHT - stroke.y, stroke.height)
+							);
+							canvas.composite(crop, stroke.x, stroke.y, {
+								mode: Jimp.BLEND_MULTIPLY,
+								opacitySource: 0.85,
+								opacityDest: 1,
+							});
+						}
+					} catch (err) {
+						console.warn(`Shape pattern asset ${stroke.patternAssetId} failed to load: ${err.message}`);
+					}
 				}
 			}
 		}
