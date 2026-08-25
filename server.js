@@ -204,8 +204,11 @@ function drawFilledRoundedRect(image, x, y, w, h, hexColor, radius = 14) {
 	}
 }
 
-// Fetches asset images from the Roblox Thumbnails API (with retry logic)
-async function fetchRobloxAssetImage(assetId) {
+// Fetches asset images from the Roblox Thumbnails API (with retry logic & ID sanitization)
+async function fetchRobloxAssetImage(rawAssetId) {
+	if (!rawAssetId) return null;
+	// Strip "rbxassetid://" and any non-numeric characters
+	const assetId = String(rawAssetId).replace(/\D/g, '');
 	if (!assetId) return null;
 
 	const thumbUrl = `https://thumbnails.roblox.com/v1/assets?assetIds=${assetId}&size=420x420&format=Png`;
@@ -396,23 +399,13 @@ app.post('/render', async (req, res) => {
 					}
 				}
 
-				// If shape had an applied texture pattern, composite it over the shape bounds
+				// If shape had an applied texture pattern, composite it directly over the shape bounds
 				if (stroke.patternAssetId && (tool === 'Rectangle' || tool === 'Circle' || tool === 'Rounded')) {
 					try {
 						const patImg = await fetchRobloxAssetImage(stroke.patternAssetId);
 						if (patImg) {
-							patImg.resize(TEMPLATE_WIDTH, TEMPLATE_HEIGHT);
-							const crop = patImg.clone().crop(
-								Math.max(0, stroke.x),
-								Math.max(0, stroke.y),
-								Math.min(TEMPLATE_WIDTH - stroke.x, stroke.width),
-								Math.min(TEMPLATE_HEIGHT - stroke.y, stroke.height)
-							);
-							canvas.composite(crop, stroke.x, stroke.y, {
-								mode: Jimp.BLEND_MULTIPLY,
-								opacitySource: 0.85,
-								opacityDest: 1,
-							});
+							patImg.resize(Math.max(1, stroke.width), Math.max(1, stroke.height));
+							canvas.composite(patImg, stroke.x, stroke.y);
 						}
 					} catch (err) {
 						console.warn(`Shape pattern asset ${stroke.patternAssetId} failed to load: ${err.message}`);
