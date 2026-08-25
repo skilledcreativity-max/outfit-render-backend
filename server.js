@@ -253,26 +253,8 @@ app.post('/render', async (req, res) => {
 			return res.status(400).json({ success: false, message: 'Missing exportCode or baseColorHex.' });
 		}
 
-		// Load official Roblox template image as the base canvas
-		const localTemplatePath = path.join(__dirname, 'templates', isPants ? 'pants_template.png' : 'shirt_template.png');
-		let canvas;
-
-		if (fs.existsSync(localTemplatePath)) {
-			canvas = await Jimp.read(localTemplatePath);
-		} else {
-			const templateUrl = isPants ? OFFICIAL_TEMPLATES.Pants : OFFICIAL_TEMPLATES.Shirt;
-			const templateResponse = await axios.get(templateUrl, {
-				responseType: 'arraybuffer',
-				headers: {
-					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-					'Accept': 'image/png,image/*;q=0.8',
-				},
-				timeout: 15000,
-			});
-			canvas = await Jimp.read(Buffer.from(templateResponse.data));
-		}
-
-		canvas.resize(TEMPLATE_WIDTH, TEMPLATE_HEIGHT);
+		// Create a pristine 585x559 transparent PNG canvas (standard for classic Roblox clothing)
+		let canvas = new Jimp(TEMPLATE_WIDTH, TEMPLATE_HEIGHT, 0x00000000);
 
 		// Determine active UV panels based on Clothing Type and Sleeves/Shorts
 		const activePanels = [];
