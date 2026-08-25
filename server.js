@@ -24,6 +24,12 @@ app.use('/renders', express.static(RENDER_DIR));
 const TEMPLATE_WIDTH = 585;
 const TEMPLATE_HEIGHT = 559;
 
+// Official Roblox template overlay images (transparent PNG with labels & borders)
+const TEMPLATE_OVERLAYS = {
+	Shirt: 'https://static.wikia.nocookie.net/roblox/images/d/d5/Template-Shirts-R15_07072020.png',
+	Pants: 'https://static.wikia.nocookie.net/roblox/images/0/07/Template-Pants-R15_07072020.png',
+};
+
 // Official Roblox Classic Clothing Template UV Coordinate Boxes (585 x 559)
 const UV_PANELS = {
 	// Torso Panels (128x128 front/back, 64x128 sides, 128x64 top/bottom)
@@ -249,6 +255,21 @@ app.post('/render', async (req, res) => {
 					drawCircle(canvas, pt.x, pt.y, radius, stroke.colorHex, isEraser);
 				}
 			}
+		}
+
+		// 5. Composite official Roblox template outline and labels on top
+		const templateOverlayUrl = isPants ? TEMPLATE_OVERLAYS.Pants : TEMPLATE_OVERLAYS.Shirt;
+		try {
+			const overlayResponse = await axios.get(templateOverlayUrl, { responseType: 'arraybuffer', timeout: 10000 });
+			const overlayImg = await Jimp.read(Buffer.from(overlayResponse.data));
+			overlayImg.resize(TEMPLATE_WIDTH, TEMPLATE_HEIGHT);
+			canvas.composite(overlayImg, 0, 0, {
+				mode: Jimp.BLEND_SOURCE_OVER,
+				opacitySource: 0.9,
+				opacityDest: 1,
+			});
+		} catch (err) {
+			console.warn(`Failed to composite template overlay: ${err.message}`);
 		}
 
 		const fileName = `${exportCode}.png`;
