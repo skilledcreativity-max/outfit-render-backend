@@ -36,31 +36,31 @@ const TEMPLATE_OVERLAYS = {
 	Pants: 'https://static.wikia.nocookie.net/roblox/images/0/07/Template-Pants-R15_07072020.png',
 };
 
-// Official Roblox Classic Clothing Template UV Coordinate Boxes (585 x 559)
+// Official Roblox R15 Template UV Coordinates (585 x 559)
 const UV_PANELS = {
-	// Torso Panels (128x128 front/back, 64x128 sides, 128x64 top/bottom)
-	TORSO_TOP:    { x: 164, y: 0,   w: 128, h: 64 },
-	TORSO_BOTTOM: { x: 164, y: 192, w: 128, h: 64 },
-	TORSO_RIGHT:  { x: 100, y: 64,  w: 64,  h: 128 },
-	TORSO_FRONT:  { x: 164, y: 64,  w: 128, h: 128 },
-	TORSO_LEFT:   { x: 292, y: 64,  w: 64,  h: 128 },
-	TORSO_BACK:   { x: 356, y: 64,  w: 128, h: 128 },
+	// Torso (128x128 front/back, 64x128 sides, 128x64 top/bottom)
+	TORSO_TOP:    { x: 213, y: 28,  w: 128, h: 64 },
+	TORSO_RIGHT:  { x: 149, y: 92,  w: 64,  h: 128 },
+	TORSO_FRONT:  { x: 213, y: 92,  w: 128, h: 128 },
+	TORSO_LEFT:   { x: 341, y: 92,  w: 64,  h: 128 },
+	TORSO_BACK:   { x: 405, y: 92,  w: 128, h: 128 },
+	TORSO_BOTTOM: { x: 213, y: 220, w: 128, h: 64 },
 
-	// Right Arm / Leg (x: 0..256, y: 284..540)
-	R_TOP:        { x: 64,  y: 284, w: 64,  h: 64 },
-	R_BOTTOM:     { x: 64,  y: 476, w: 64,  h: 64 },
-	R_RIGHT:      { x: 0,   y: 348, w: 64,  h: 128 },
-	R_FRONT:      { x: 64,  y: 348, w: 64,  h: 128 },
-	R_LEFT:       { x: 128, y: 348, w: 64,  h: 128 },
-	R_BACK:       { x: 192, y: 348, w: 64,  h: 128 },
+	// Right Arm / Leg (x: 21..277, y: 284..540)
+	R_TOP:        { x: 213, y: 284, w: 64,  h: 64 },
+	R_RIGHT:      { x: 21,  y: 348, w: 64,  h: 128 },
+	R_FRONT:      { x: 85,  y: 348, w: 64,  h: 128 },
+	R_LEFT:       { x: 149, y: 348, w: 64,  h: 128 },
+	R_BACK:       { x: 213, y: 348, w: 64,  h: 128 },
+	R_BOTTOM:     { x: 213, y: 476, w: 64,  h: 64 },
 
-	// Left Arm / Leg (x: 292..548, y: 284..540)
-	L_TOP:        { x: 356, y: 284, w: 64,  h: 64 },
-	L_BOTTOM:     { x: 356, y: 476, w: 64,  h: 64 },
-	L_RIGHT:      { x: 292, y: 348, w: 64,  h: 128 },
-	L_FRONT:      { x: 356, y: 348, w: 64,  h: 128 },
-	L_LEFT:       { x: 420, y: 348, w: 64,  h: 128 },
-	L_BACK:       { x: 484, y: 348, w: 64,  h: 128 },
+	// Left Arm / Leg (x: 277..533, y: 284..540)
+	L_TOP:        { x: 277, y: 284, w: 64,  h: 64 },
+	L_RIGHT:      { x: 277, y: 348, w: 64,  h: 128 },
+	L_FRONT:      { x: 341, y: 348, w: 64,  h: 128 },
+	L_LEFT:       { x: 405, y: 348, w: 64,  h: 128 },
+	L_BACK:       { x: 469, y: 348, w: 64,  h: 128 },
+	L_BOTTOM:     { x: 277, y: 476, w: 64,  h: 64 },
 };
 
 function fillRectOnCanvas(canvas, rect, hexColor) {
