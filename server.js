@@ -64,7 +64,16 @@ const UV_PANELS = {
 };
 
 function fillRectOnCanvas(canvas, rect, hexColor) {
-	const block = new Jimp(rect.w, rect.h, hexColor);
+	let color;
+	try {
+		// Jimp's constructor needs a 0xRRGGBBAA integer, not a "#RRGGBB" string —
+		// passing the raw CSS string in (as this used to) silently produces a
+		// bogus near-black fill instead of the picked color.
+		color = Jimp.cssColorToHex(hexColor);
+	} catch {
+		color = 0xFFFFFFFF;
+	}
+	const block = new Jimp(rect.w, rect.h, color);
 	canvas.composite(block, rect.x, rect.y);
 }
 
