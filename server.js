@@ -333,14 +333,24 @@ app.post('/render', async (req, res) => {
 			fillRectOnCanvas(canvas, panel, baseColorHex);
 		}
 
-		// 2. Composite optional pattern texture masked to active panels
+		// 2. Composite optional pattern texture repeating (tiled) across active panels
 		if (patternAssetId) {
 			try {
 				const patternImg = await fetchRobloxAssetImage(patternAssetId);
 				if (patternImg) {
-					patternImg.resize(TEMPLATE_WIDTH, TEMPLATE_HEIGHT);
+					const tileSize = 64; // Standard Roblox fabric repeat size
+					patternImg.resize(tileSize, tileSize);
+
+					// Create a tiled pattern canvas so textures repeat instead of stretching
+					const tiledCanvas = new Jimp(TEMPLATE_WIDTH, TEMPLATE_HEIGHT, 0x00000000);
+					for (let py = 0; py < TEMPLATE_HEIGHT; py += tileSize) {
+						for (let px = 0; px < TEMPLATE_WIDTH; px += tileSize) {
+							tiledCanvas.composite(patternImg, px, py);
+						}
+					}
+
 					for (const panel of activePanels) {
-						const crop = patternImg.clone().crop(panel.x, panel.y, panel.w, panel.h);
+						const crop = tiledCanvas.clone().crop(panel.x, panel.y, panel.w, panel.h);
 						canvas.composite(crop, panel.x, panel.y, {
 							mode: Jimp.BLEND_MULTIPLY,
 							opacitySource: 0.85,
@@ -399,13 +409,20 @@ app.post('/render', async (req, res) => {
 					}
 				}
 
-				// If shape had an applied texture pattern, composite it directly over the shape bounds
+				// If shape had an applied texture pattern, tile it cleanly inside the shape bounds
 				if (stroke.patternAssetId && (tool === 'Rectangle' || tool === 'Circle' || tool === 'Rounded')) {
 					try {
 						const patImg = await fetchRobloxAssetImage(stroke.patternAssetId);
 						if (patImg) {
-							patImg.resize(Math.max(1, stroke.width), Math.max(1, stroke.height));
-							canvas.composite(patImg, stroke.x, stroke.y);
+							const tileSize = 48;
+							patImg.resize(tileSize, tileSize);
+							const shapeTiled = new Jimp(Math.max(1, stroke.width), Math.max(1, stroke.height), 0x00000000);
+							for (let sy = 0; sy < stroke.height; sy += tileSize) {
+								for (let sx = 0; sx < stroke.width; sx += tileSize) {
+									shapeTiled.composite(patImg, sx, sy);
+								}
+							}
+							canvas.composite(shapeTiled, stroke.x, stroke.y);
 						}
 					} catch (err) {
 						console.warn(`Shape pattern asset ${stroke.patternAssetId} failed to load: ${err.message}`);
