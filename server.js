@@ -24,7 +24,13 @@ app.use('/renders', express.static(RENDER_DIR));
 const TEMPLATE_WIDTH = 585;
 const TEMPLATE_HEIGHT = 559;
 
-// Official Roblox template overlay images (transparent PNG with labels & borders)
+// Official Roblox CDN template URLs
+const OFFICIAL_TEMPLATES = {
+	Shirt: 'https://static.rbxcdn.com/images/Template-Shirts-R15_07262019.png',
+	Pants: 'https://static.rbxcdn.com/images/Template-Pants-R15_07262019.png',
+};
+
+// Official Roblox Classic Clothing Template UV Coordinate Boxes (585 x 559)
 const TEMPLATE_OVERLAYS = {
 	Shirt: 'https://static.wikia.nocookie.net/roblox/images/d/d5/Template-Shirts-R15_07072020.png',
 	Pants: 'https://static.wikia.nocookie.net/roblox/images/0/07/Template-Pants-R15_07072020.png',
@@ -135,8 +141,26 @@ app.post('/render', async (req, res) => {
 			return res.status(400).json({ success: false, message: 'Missing exportCode or baseColorHex.' });
 		}
 
-		// Initialize 585x559 canvas with full alpha transparency
-		const canvas = new Jimp(TEMPLATE_WIDTH, TEMPLATE_HEIGHT, 0x00000000);
+		// Load official Roblox template image as the base canvas
+		const localTemplatePath = path.join(__dirname, 'templates', isPants ? 'pants_template.png' : 'shirt_template.png');
+		let canvas;
+
+		if (fs.existsSync(localTemplatePath)) {
+			canvas = await Jimp.read(localTemplatePath);
+		} else {
+			const templateUrl = isPants ? OFFICIAL_TEMPLATES.Pants : OFFICIAL_TEMPLATES.Shirt;
+			const templateResponse = await axios.get(templateUrl, {
+				responseType: 'arraybuffer',
+				headers: {
+					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+					'Accept': 'image/png,image/*;q=0.8',
+				},
+				timeout: 15000,
+			});
+			canvas = await Jimp.read(Buffer.from(templateResponse.data));
+		}
+
+		canvas.resize(TEMPLATE_WIDTH, TEMPLATE_HEIGHT);
 
 		// Determine active UV panels based on Clothing Type and Sleeves/Shorts
 		const activePanels = [];
