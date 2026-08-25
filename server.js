@@ -1,6 +1,6 @@
-// Outfit Studio render backend
-// Takes a design (base color hex, Roblox pattern asset id, Roblox graphic asset id, sleeve/pant type)
-// and composites it into a real 585x559 PNG classic clothing template with accurate UV coordinates and transparency.
+// Outfit Studio Render Backend
+// Composites base colors, patterns, chest decals, and custom drawn brush/eraser strokes
+// into an official 585x559 transparent classic Roblox clothing template PNG.
 
 const express = require('express');
 const Jimp = require('jimp');
@@ -9,7 +9,8 @@ const path = require('path');
 const fs = require('fs');
 
 const app = express();
-app.use(express.json({ limit: '2mb' }));
+// Increased JSON limit to accommodate drawing stroke coordinate payloads
+app.use(express.json({ limit: '10mb' }));
 
 const PORT = process.env.PORT || 3000;
 const RENDER_DIR = path.join(__dirname, 'renders');
@@ -17,7 +18,7 @@ if (!fs.existsSync(RENDER_DIR)) {
 	fs.mkdirSync(RENDER_DIR, { recursive: true });
 }
 
-// Serve finished PNGs statically at /renders/<code>.png
+// Serve rendered templates statically at /renders/<code>.png
 app.use('/renders', express.static(RENDER_DIR));
 
 const TEMPLATE_WIDTH = 585;
@@ -55,6 +56,31 @@ function fillRectOnCanvas(canvas, rect, hexColor) {
 	canvas.composite(block, rect.x, rect.y);
 }
 
+// Rasterizes player brush and eraser circles onto the Jimp image
+function drawCircle(image, cx, cy, radius, hexColor, isEraser = false) {
+	let color = 0x00000000;
+	if (!isEraser) {
+		try {
+			color = Jimp.cssColorToHex(hexColor);
+		} catch {
+			color = 0xFFFFFFFF;
+		}
+	}
+
+	for (let y = -radius; y <= radius; y++) {
+		for (let x = -radius; x <= radius; x++) {
+			if (x * x + y * y <= radius * radius) {
+				const px = cx + x;
+				const py = cy + y;
+				if (px >= 0 && px < TEMPLATE_WIDTH && py >= 0 && py < TEMPLATE_HEIGHT) {
+					image.setPixelColor(color, px, py);
+				}
+			}
+		}
+	}
+}
+
+// Fetches asset images from the Roblox Thumbnails API (with retry logic)
 async function fetchRobloxAssetImage(assetId) {
 	if (!assetId) return null;
 
@@ -86,7 +112,16 @@ async function fetchRobloxAssetImage(assetId) {
 
 app.post('/render', async (req, res) => {
 	try {
-		const { exportCode, clothingType, sleeveType, baseColorHex, patternAssetId, graphicAssetId } = req.body;
+		const {
+			exportCode,
+			clothingType,
+			sleeveType,
+			baseColorHex,
+			patternAssetId,
+			graphicAssetId,
+			drawingStrokes
+		} = req.body;
+
 		const isPants = clothingType === 'Pants';
 		const sleeve = sleeveType || 'Long';
 
@@ -101,7 +136,7 @@ app.post('/render', async (req, res) => {
 		const activePanels = [];
 
 		if (!isPants) {
-			// Shirt: Torso panels are always active
+			// Shirt: Always render torso
 			activePanels.push(
 				UV_PANELS.TORSO_TOP,
 				UV_PANELS.TORSO_BOTTOM,
@@ -118,7 +153,7 @@ app.post('/render', async (req, res) => {
 					UV_PANELS.L_TOP, UV_PANELS.L_BOTTOM, UV_PANELS.L_RIGHT, UV_PANELS.L_FRONT, UV_PANELS.L_LEFT, UV_PANELS.L_BACK
 				);
 			} else if (sleeve === 'Short') {
-				// Short arms (64px height) without bottom cuffs so avatar skin is visible
+				// Half arms (64px height) without bottom cuffs so avatar skin is visible
 				activePanels.push(
 					UV_PANELS.R_TOP,
 					{ x: UV_PANELS.R_RIGHT.x, y: UV_PANELS.R_RIGHT.y, w: 64, h: 64 },
@@ -191,7 +226,7 @@ app.post('/render', async (req, res) => {
 			}
 		}
 
-		// 3. Composite chest graphic onto front torso panel
+		// 3. Composite chest graphic decal onto front torso panel
 		if (!isPants && graphicAssetId) {
 			try {
 				const graphicImg = await fetchRobloxAssetImage(graphicAssetId);
@@ -201,6 +236,18 @@ app.post('/render', async (req, res) => {
 				}
 			} catch (err) {
 				console.warn(`Graphic asset ${graphicAssetId} failed to load: ${err.message}`);
+			}
+		}
+
+		// 4. Render all user custom drawings and paint strokes directly onto the template
+		if (Array.isArray(drawingStrokes)) {
+			for (const stroke of drawingStrokes) {
+				if (!stroke.points || !Array.isArray(stroke.points)) continue;
+				const isEraser = stroke.tool === 'Eraser';
+				const radius = Math.max(1, Math.floor((stroke.size || 6) / 2));
+				for (const pt of stroke.points) {
+					drawCircle(canvas, pt.x, pt.y, radius, stroke.colorHex, isEraser);
+				}
 			}
 		}
 
