@@ -4,12 +4,11 @@ const crypto = require("crypto");
 const express = require("express");
 const helmet = require("helmet");
 const { rateLimit, ipKeyGenerator } = require("express-rate-limit");
-const { S3Client, PutObjectCommand, GetObjectCommand, HeadBucketCommand } = require("@aws-sdk/client-s3");
-const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const { renderDesign, sanitizeRenderRequest } = require("./renderer");
 
 const MAX_BODY_BYTES = 256 * 1024;
-const REQUIRED_ENVIRONMENT = ["RENDER_API_KEY", "S3_REGION", "S3_BUCKET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "PUBLIC_BASE_URL"];
+const MAX_OUTPUT_BYTES = 6 * 1024 * 1024;
+const REQUIRED_ENVIRONMENT = ["RENDER_API_KEY", "PUBLIC_BASE_URL"];
 
 function requiredEnvironment(name) {
   const value = process.env[name];
@@ -28,20 +27,17 @@ function parseAssetAllowlist(value) {
 
 function createConfiguration() {
   for (const name of REQUIRED_ENVIRONMENT) requiredEnvironment(name);
-  const baseUrl = new URL(requiredEnvironment("PUBLIC_BASE_URL"));
-  if (baseUrl.protocol !== "https:") throw new Error("PUBLIC_BASE_URL must use HTTPS.");
+  const publicBaseUrl = new URL(requiredEnvironment("PUBLIC_BASE_URL"));
+  if (publicBaseUrl.protocol !== "https:") throw new Error("PUBLIC_BASE_URL must use HTTPS.");
   return Object.freeze({
     port: parseIntegerEnvironment("PORT", 3000, 1, 65535),
     apiKey: requiredEnvironment("RENDER_API_KEY"),
-    publicBaseUrl: baseUrl.toString().replace(/\/$/, ""),
-    bucket: requiredEnvironment("S3_BUCKET"),
-    region: requiredEnvironment("S3_REGION"),
-    endpoint: process.env.S3_ENDPOINT || undefined,
-    forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
-    maxRequestsPerMinute: parseIntegerEnvironment("RENDER_MAX_REQUESTS_PER_MINUTE", 30, 1, 600),
-    maxConcurrentJobs: parseIntegerEnvironment("RENDER_MAX_CONCURRENT_JOBS", 2, 1, 16),
-    maxQueueDepth: parseIntegerEnvironment("RENDER_MAX_QUEUE_DEPTH", 20, 0, 200),
-    signedUrlTtlSeconds: parseIntegerEnvironment("RENDER_SIGNED_URL_TTL_SECONDS", 900, 60, 3600),
+    publicBaseUrl: publicBaseUrl.toString().replace(/\/$/, ""),
+    maxRequestsPerMinute: parseIntegerEnvironment("RENDER_MAX_REQUESTS_PER_MINUTE", 12, 1, 60),
+    maxConcurrentJobs: parseIntegerEnvironment("RENDER_MAX_CONCURRENT_JOBS", 1, 1, 4),
+    maxQueueDepth: parseIntegerEnvironment("RENDER_MAX_QUEUE_DEPTH", 4, 0, 20),
+    downloadTtlSeconds: parseIntegerEnvironment("RENDER_DOWNLOAD_TTL_SECONDS", 300, 60, 900),
+    maxRetainedDownloads: parseIntegerEnvironment("RENDER_MAX_RETAINED_DOWNLOADS", 10, 1, 25),
     assetPolicy: {
       approvedPatternAssetIds: parseAssetAllowlist(process.env.APPROVED_PATTERN_ASSET_IDS),
       approvedGraphicAssetIds: parseAssetAllowlist(process.env.APPROVED_GRAPHIC_ASSET_IDS),
@@ -87,46 +83,57 @@ function createQueue(maxConcurrentJobs, maxQueueDepth) {
   return Object.freeze({ enqueue, snapshot: () => ({ activeJobs, queuedJobs: waiting.length }) });
 }
 
-function createStorage(config) {
-  const client = new S3Client({
-    region: config.region,
-    endpoint: config.endpoint,
-    forcePathStyle: config.forcePathStyle,
-    credentials: {
-      accessKeyId: requiredEnvironment("S3_ACCESS_KEY_ID"),
-      secretAccessKey: requiredEnvironment("S3_SECRET_ACCESS_KEY"),
-    },
-  });
+function createEphemeralDownloadStore(config) {
+  const downloads = new Map();
 
-  async function healthCheck() {
-    await client.send(new HeadBucketCommand({ Bucket: config.bucket }));
+  function deleteExpired(now = Date.now()) {
+    for (const [token, entry] of downloads) {
+      if (entry.expiresAt <= now) downloads.delete(token);
+    }
   }
 
-  async function putPng(buffer) {
-    const outputId = crypto.randomBytes(32).toString("hex");
-    const key = `renders/${outputId}.png`;
-    await client.send(new PutObjectCommand({
-      Bucket: config.bucket,
-      Key: key,
-      Body: buffer,
-      ContentType: "image/png",
-      CacheControl: "private, max-age=0, no-store",
-      ServerSideEncryption: "AES256",
-      Metadata: { generatedBy: "outfit-studio-renderer-v2" },
-    }));
-    const imageUrl = await getSignedUrl(client, new GetObjectCommand({ Bucket: config.bucket, Key: key, ResponseContentType: "image/png", ResponseContentDisposition: "attachment" }), { expiresIn: config.signedUrlTtlSeconds });
-    return { outputId, imageUrl };
+  function discardOldest() {
+    const oldest = downloads.keys().next().value;
+    if (oldest) downloads.delete(oldest);
   }
 
-  return Object.freeze({ healthCheck, putPng });
+  function putPng(buffer) {
+    if (!Buffer.isBuffer(buffer) || buffer.length === 0 || buffer.length > MAX_OUTPUT_BYTES) {
+      throw new Error("Generated output exceeds the safe delivery limit.");
+    }
+    deleteExpired();
+    while (downloads.size >= config.maxRetainedDownloads) discardOldest();
+    const token = crypto.randomBytes(32).toString("hex");
+    const expiresAt = Date.now() + config.downloadTtlSeconds * 1000;
+    downloads.set(token, { buffer, expiresAt });
+    return {
+      imageUrl: `${config.publicBaseUrl}/download/${token}`,
+      expiresInSeconds: config.downloadTtlSeconds,
+    };
+  }
+
+  function takePng(token) {
+    deleteExpired();
+    const entry = downloads.get(token);
+    if (!entry) return null;
+    downloads.delete(token);
+    return entry.buffer;
+  }
+
+  function healthCheck() {
+    deleteExpired();
+    return { retainedDownloads: downloads.size };
+  }
+
+  return Object.freeze({ putPng, takePng, healthCheck });
 }
 
 function createApp(config, options = {}) {
   const app = express();
   const queue = options.queue || createQueue(config.maxConcurrentJobs, config.maxQueueDepth);
-  const storage = options.storage || createStorage(config);
+  const downloads = options.downloads || createEphemeralDownloadStore(config);
   const renderer = options.renderer || renderDesign;
-  let startedAt = Date.now();
+  const startedAt = Date.now();
   let renderSuccesses = 0;
   let renderFailures = 0;
   let rejectedRequests = 0;
@@ -144,35 +151,39 @@ function createApp(config, options = {}) {
   }));
   app.use(express.json({ limit: MAX_BODY_BYTES, strict: true, type: "application/json" }));
 
-  app.get("/health", async (_request, response) => {
+  app.get("/health", (_request, response) => {
     const state = queue.snapshot();
-    let storageReady = true;
-    try {
-      if (typeof storage.healthCheck === "function") await storage.healthCheck();
-    } catch (error) {
-      storageReady = false;
-      console.error("Storage health check failed", { message: error instanceof Error ? error.message : "unknown" });
-    }
+    const outputState = downloads.healthCheck();
     const overloaded = state.queuedJobs >= config.maxQueueDepth;
-    const ready = storageReady && !overloaded;
-    response.status(ready ? 200 : 503).json({
-      success: ready,
-      status: ready ? "ready" : (storageReady ? "overloaded" : "storage-unavailable"),
+    response.status(overloaded ? 503 : 200).json({
+      success: !overloaded,
+      status: overloaded ? "overloaded" : "ready",
+      mode: "ephemeral-free-beta",
       uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
       ...state,
+      ...outputState,
     });
   });
 
   app.get("/metrics", (request, response) => {
     const suppliedKey = request.get("x-api-key") || "";
     if (!secureEquals(suppliedKey, config.apiKey)) return response.status(401).json({ success: false, message: "Unauthorized." });
-    return response.json({
-      success: true,
-      renderSuccesses,
-      renderFailures,
-      rejectedRequests,
-      ...queue.snapshot(),
+    return response.json({ success: true, renderSuccesses, renderFailures, rejectedRequests, ...queue.snapshot(), ...downloads.healthCheck() });
+  });
+
+  app.get("/download/:token", (request, response) => {
+    const token = request.params.token;
+    if (!/^[a-f0-9]{64}$/i.test(token)) return response.status(404).send("Not found.");
+    const png = downloads.takePng(token);
+    if (!png) return response.status(404).send("This download link has expired or was already used.");
+    response.set({
+      "Cache-Control": "no-store, private, max-age=0",
+      "Content-Disposition": "attachment; filename=outfit-studio-template.png",
+      "Content-Length": String(png.length),
+      "Content-Type": "image/png",
+      "X-Content-Type-Options": "nosniff",
     });
+    return response.status(200).send(png);
   });
 
   app.post("/render", async (request, response) => {
@@ -185,22 +196,17 @@ function createApp(config, options = {}) {
     let design;
     try {
       design = sanitizeRenderRequest(request.body, config.assetPolicy);
-    } catch (error) {
+    } catch (_error) {
       rejectedRequests += 1;
       return response.status(400).json({ success: false, message: "Invalid render request." });
     }
 
     try {
-      const result = await queue.enqueue(async () => {
-        const png = await renderer(design);
-        return storage.putPng(png);
-      });
+      const result = await queue.enqueue(async () => downloads.putPng(await renderer(design)));
       renderSuccesses += 1;
-      return response.status(201).json({ success: true, imageUrl: result.imageUrl, expiresInSeconds: config.signedUrlTtlSeconds });
+      return response.status(201).json({ success: true, imageUrl: result.imageUrl, expiresInSeconds: result.expiresInSeconds });
     } catch (error) {
-      if (error && error.code === "QUEUE_FULL") {
-        return response.status(503).json({ success: false, message: "Renderer is busy. Please try again shortly." });
-      }
+      if (error && error.code === "QUEUE_FULL") return response.status(503).json({ success: false, message: "Renderer is busy. Please try again shortly." });
       renderFailures += 1;
       console.error("Render failed", { requestId: design.requestId, message: error instanceof Error ? error.message : "unknown" });
       return response.status(502).json({ success: false, message: "Template generation is temporarily unavailable." });
@@ -233,4 +239,4 @@ if (require.main === module) {
   process.on("SIGINT", shutdown);
 }
 
-module.exports = { createApp, createConfiguration, secureEquals };
+module.exports = { createApp, createConfiguration, createEphemeralDownloadStore, secureEquals };
