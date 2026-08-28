@@ -129,9 +129,9 @@ function createEphemeralDownloadStore(config) {
 }
 
 function createApp(config, options = {}) {
-  const app = express();
+    const app = express();
   const queue = options.queue || createQueue(config.maxConcurrentJobs, config.maxQueueDepth);
-  const downloads = options.downloads || createEphemeralDownloadStore(config);
+  const downloads = options.storage || options.downloads || createEphemeralDownloadStore(config);
   const renderer = options.renderer || renderDesign;
   const startedAt = Date.now();
   let renderSuccesses = 0;
@@ -141,12 +141,15 @@ function createApp(config, options = {}) {
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
   app.use(helmet({ crossOriginResourcePolicy: { policy: "same-site" } }));
-  app.use("/render", rateLimit({
+    app.use("/render", rateLimit({
     windowMs: 60 * 1000,
     limit: config.maxRequestsPerMinute,
     standardHeaders: "draft-8",
     legacyHeaders: false,
-    keyGenerator: (request) => ipKeyGenerator(request.ip),
+    keyGenerator: (request) => {
+      const playerId = String(request.get("x-player-id") || "").replace(/\D/g, "").slice(0, 20);
+      return playerId || ipKeyGenerator(request.ip);
+    },
     message: { success: false, message: "Too many requests. Please retry later." },
   }));
   app.use(express.json({ limit: MAX_BODY_BYTES, strict: true, type: "application/json" }));
