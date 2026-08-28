@@ -33,11 +33,21 @@ function createConfiguration() {
     port: parseIntegerEnvironment("PORT", 3000, 1, 65535),
     apiKey: requiredEnvironment("RENDER_API_KEY"),
     publicBaseUrl: publicBaseUrl.toString().replace(/\/$/, ""),
-    maxRequestsPerMinute: parseIntegerEnvironment("RENDER_MAX_REQUESTS_PER_MINUTE", 12, 1, 60),
-    maxConcurrentJobs: parseIntegerEnvironment("RENDER_MAX_CONCURRENT_JOBS", 1, 1, 4),
-    maxQueueDepth: parseIntegerEnvironment("RENDER_MAX_QUEUE_DEPTH", 4, 0, 20),
+    maxRequestsPerMinute: parseIntegerEnvironment("RENDER_MAX_REQUESTS_PER_MINUTE", 12, 1, 600),
+    // Raised from the beta defaults (1 concurrent / 4 queued). These are still a
+    // single-process ceiling — real scale comes from running multiple workers
+    // behind shared S3 storage (see s3Bucket below), not from this number alone.
+    maxConcurrentJobs: parseIntegerEnvironment("RENDER_MAX_CONCURRENT_JOBS", 4, 1, 32),
+    maxQueueDepth: parseIntegerEnvironment("RENDER_MAX_QUEUE_DEPTH", 20, 0, 500),
     downloadTtlSeconds: parseIntegerEnvironment("RENDER_DOWNLOAD_TTL_SECONDS", 300, 60, 900),
     maxRetainedDownloads: parseIntegerEnvironment("RENDER_MAX_RETAINED_DOWNLOADS", 10, 1, 25),
+    // Optional. When S3_BUCKET is set, rendered PNGs are stored in S3 and served
+    // via signed URLs instead of an in-process Map, which is required for
+    // running more than one worker (see PRODUCTION_RUNBOOK.md step 2).
+    // Left unset, the server falls back to in-memory storage for local/dev use.
+    s3Bucket: process.env.S3_BUCKET || "",
+    s3Region: process.env.S3_REGION || "us-east-1",
+    s3KeyPrefix: process.env.S3_KEY_PREFIX || "renders/",
     assetPolicy: {
       approvedPatternAssetIds: parseAssetAllowlist(process.env.APPROVED_PATTERN_ASSET_IDS),
       approvedGraphicAssetIds: parseAssetAllowlist(process.env.APPROVED_GRAPHIC_ASSET_IDS),
@@ -122,16 +132,27 @@ function createEphemeralDownloadStore(config) {
 
   function healthCheck() {
     deleteExpired();
-    return { retainedDownloads: downloads.size };
+    return { storageBackend: "ephemeral", retainedDownloads: downloads.size };
   }
 
   return Object.freeze({ putPng, takePng, healthCheck });
 }
 
+// Only reaches into s3-storage.js (and therefore only requires the AWS SDK to
+// be installed) when S3_BUCKET is actually configured. This keeps local dev,
+// CI, and the existing test suite working without any AWS dependency present.
+function createDefaultDownloadStore(config) {
+  if (config.s3Bucket) {
+    const { createS3DownloadStore } = require("./s3-storage");
+    return createS3DownloadStore(config);
+  }
+  return createEphemeralDownloadStore(config);
+}
+
 function createApp(config, options = {}) {
-    const app = express();
+  const app = express();
   const queue = options.queue || createQueue(config.maxConcurrentJobs, config.maxQueueDepth);
-  const downloads = options.storage || options.downloads || createEphemeralDownloadStore(config);
+  const downloads = options.storage || options.downloads || createDefaultDownloadStore(config);
   const renderer = options.renderer || renderDesign;
   const startedAt = Date.now();
   let renderSuccesses = 0;
@@ -141,11 +162,16 @@ function createApp(config, options = {}) {
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
   app.use(helmet({ crossOriginResourcePolicy: { policy: "same-site" } }));
-    app.use("/render", rateLimit({
+  app.use("/render", rateLimit({
     windowMs: 60 * 1000,
     limit: config.maxRequestsPerMinute,
     standardHeaders: "draft-8",
     legacyHeaders: false,
+    // x-player-id is set server-side by OutfitStudioServer_Hardened.server.luau
+    // from player.UserId, so it can't be spoofed by the client in this call
+    // path. It is used ONLY as a fairer rate-limit bucket than shared
+    // server-to-server IP — it is not authentication and must never be trusted
+    // as proof of identity anywhere else in this service.
     keyGenerator: (request) => {
       const playerId = String(request.get("x-player-id") || "").replace(/\D/g, "").slice(0, 20);
       return playerId || ipKeyGenerator(request.ip);
@@ -156,37 +182,41 @@ function createApp(config, options = {}) {
 
   app.get("/health", (_request, response) => {
     const state = queue.snapshot();
-    const outputState = downloads.healthCheck();
     const overloaded = state.queuedJobs >= config.maxQueueDepth;
-    response.status(overloaded ? 503 : 200).json({
-      success: !overloaded,
-      status: overloaded ? "overloaded" : "ready",
-      mode: "ephemeral-free-beta",
-      uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
-      ...state,
-      ...outputState,
+    Promise.resolve(downloads.healthCheck()).then((outputState) => {
+      response.status(overloaded ? 503 : 200).json({
+        success: !overloaded,
+        status: overloaded ? "overloaded" : "ready",
+        mode: "ephemeral-free-beta",
+        uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+        ...state,
+        ...outputState,
+      });
     });
   });
 
   app.get("/metrics", (request, response) => {
     const suppliedKey = request.get("x-api-key") || "";
     if (!secureEquals(suppliedKey, config.apiKey)) return response.status(401).json({ success: false, message: "Unauthorized." });
-    return response.json({ success: true, renderSuccesses, renderFailures, rejectedRequests, ...queue.snapshot(), ...downloads.healthCheck() });
+    return Promise.resolve(downloads.healthCheck()).then((outputState) => {
+      response.json({ success: true, renderSuccesses, renderFailures, rejectedRequests, ...queue.snapshot(), ...outputState });
+    });
   });
 
   app.get("/download/:token", (request, response) => {
     const token = request.params.token;
     if (!/^[a-f0-9]{64}$/i.test(token)) return response.status(404).send("Not found.");
-    const png = downloads.takePng(token);
-    if (!png) return response.status(404).send("This download link has expired or was already used.");
-    response.set({
-      "Cache-Control": "no-store, private, max-age=0",
-      "Content-Disposition": "attachment; filename=outfit-studio-template.png",
-      "Content-Length": String(png.length),
-      "Content-Type": "image/png",
-      "X-Content-Type-Options": "nosniff",
+    Promise.resolve(downloads.takePng(token)).then((png) => {
+      if (!png) return response.status(404).send("This download link has expired or was already used.");
+      response.set({
+        "Cache-Control": "no-store, private, max-age=0",
+        "Content-Disposition": "attachment; filename=outfit-studio-template.png",
+        "Content-Length": String(png.length),
+        "Content-Type": "image/png",
+        "X-Content-Type-Options": "nosniff",
+      });
+      return response.status(200).send(png);
     });
-    return response.status(200).send(png);
   });
 
   app.post("/render", async (request, response) => {
