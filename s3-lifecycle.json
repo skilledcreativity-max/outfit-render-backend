@@ -1,1 +1,17 @@
-
+{
+  "Rules": [
+    {
+      "ID": "DeleteExpiredOutfitStudioRenders",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "renders/"
+      },
+      "Expiration": {
+        "Days": 1
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    }
+  ]
+}
