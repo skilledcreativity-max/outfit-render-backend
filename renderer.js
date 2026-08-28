@@ -402,9 +402,11 @@ async function renderDesign(design) {
     }
   }
 
-  if (design.patternAssetId) {
+    if (design.patternAssetId) {
+    console.warn(`[DEBUG] Fetching pattern asset ${design.patternAssetId} for request ${design.requestId}`);
     try {
       const pattern = await fetchRobloxAssetImage(design.patternAssetId);
+      console.warn(`[DEBUG] Pattern asset ${design.patternAssetId} fetched OK, size=${pattern.bitmap.width}x${pattern.bitmap.height}`);
       pattern.resize({ w: 64, h: 64 });
       for (const panel of design.panels) {
         for (let y = panel.y; y < panel.y + panel.height; y += 1) {
@@ -414,8 +416,10 @@ async function renderDesign(design) {
         }
       }
     } catch (error) {
-      console.warn("Pattern asset skipped:", error.message);
+      console.warn(`[DEBUG] Pattern asset ${design.patternAssetId} FAILED:`, error.stack || error.message);
     }
+  } else {
+    console.warn(`[DEBUG] No patternAssetId present for request ${design.requestId} — design.patternAssetId="${design.patternAssetId}"`);
   }
 
   await drawGraphic(artworkLayer, design);
