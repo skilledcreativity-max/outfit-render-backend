@@ -11,18 +11,6 @@ services:
         value: "22.13.0"
       - key: RENDER_API_KEY
         sync: false
-      - key: S3_REGION
-        sync: false
-      - key: S3_BUCKET
-        sync: false
-      - key: S3_ENDPOINT
-        sync: false
-      - key: S3_FORCE_PATH_STYLE
-        value: "false"
-      - key: S3_ACCESS_KEY_ID
-        sync: false
-      - key: S3_SECRET_ACCESS_KEY
-        sync: false
       - key: PUBLIC_BASE_URL
         sync: false
       - key: APPROVED_PATTERN_ASSET_IDS
@@ -30,10 +18,12 @@ services:
       - key: APPROVED_GRAPHIC_ASSET_IDS
         sync: false
       - key: RENDER_MAX_REQUESTS_PER_MINUTE
-        value: "30"
+        value: "12"
       - key: RENDER_MAX_CONCURRENT_JOBS
-        value: "2"
+        value: "1"
       - key: RENDER_MAX_QUEUE_DEPTH
-        value: "20"
-      - key: RENDER_SIGNED_URL_TTL_SECONDS
-        value: "900"
+        value: "4"
+      - key: RENDER_DOWNLOAD_TTL_SECONDS
+        value: "300"
+      - key: RENDER_MAX_RETAINED_DOWNLOADS
+        value: "10"
