@@ -40,7 +40,11 @@ const PAINT_FIELDS = new Set(["tool", "points", "size", "colorHex"]);
 const POINT_FIELDS = new Set(["x", "y"]);
 const GRAPHIC_RECT_FIELDS = new Set(["x", "y", "width", "height"]);
 const ASSET_CACHE = new Map();
-const ASSET_CACHE_TTL_MS = 5 * 60 * 1000;
+// Approved pattern/graphic assets are curated and rarely change, so a longer
+// TTL (paired with the periodic re-warm in server.js) keeps them cached
+// across the server's whole lifetime instead of re-fetching from Roblox's
+// thumbnail API on every export.
+const ASSET_CACHE_TTL_MS = 60 * 60 * 1000;
 const ASSET_CACHE_LIMIT = 100;
 
 function isFiniteInteger(value) {
@@ -376,10 +380,26 @@ async function fetchRobloxAssetImage(assetId) {
     if (image.bitmap.width > 2048 || image.bitmap.height > 2048) throw new Error("Decoded image exceeds the dimension limit.");
     return image;
   })();
-  const image = await promise;
+    const image = await promise;
   if (ASSET_CACHE.size >= ASSET_CACHE_LIMIT) ASSET_CACHE.delete(ASSET_CACHE.keys().next().value);
   ASSET_CACHE.set(assetId, { image, expiresAt: Date.now() + ASSET_CACHE_TTL_MS });
   return image.clone();
+}
+
+// Pre-fetches a list of asset IDs into ASSET_CACHE so the first export that
+// uses one of them doesn't pay the Roblox thumbnail-API round trip. Called
+// once at server startup and re-called periodically (see server.js) so the
+// cache never goes fully cold while the process stays up. One failed asset
+// never blocks the others.
+async function warmAssetCache(assetIds) {
+  const uniqueIds = Array.from(new Set(assetIds)).filter((id) => id);
+  await Promise.all(uniqueIds.map(async (assetId) => {
+    try {
+      await fetchRobloxAssetImage(assetId);
+    } catch (error) {
+      console.warn(`[warm cache] Skipped asset ${assetId}:`, error.message);
+    }
+  }));
 }
 
 async function drawGraphic(layer, design) {
@@ -453,4 +473,5 @@ module.exports = {
   getActivePanels,
   sanitizeRenderRequest,
   renderDesign,
+  warmAssetCache,
 };
