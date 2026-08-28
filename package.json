@@ -1,14 +1,23 @@
 {
   "name": "outfit-render-backend",
-  "version": "1.0.0",
-  "description": "Composites Roblox Outfit Studio designs into downloadable PNG shirt templates.",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Authenticated and bounded renderer for Roblox Outfit Studio classic clothing templates.",
   "main": "server.js",
+  "engines": {
+    "node": ">=22.0.0 <23"
+  },
   "scripts": {
-    "start": "node server.js"
+    "start": "node --enable-source-maps server.js",
+    "test": "node --test test/*.test.js",
+    "audit": "npm audit --omit=dev --audit-level=high"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "jimp": "^0.22.12",
-    "axios": "^1.7.2"
+    "@aws-sdk/client-s3": "3.1120.0",
+    "@aws-sdk/s3-request-presigner": "3.1120.0",
+    "express": "5.2.1",
+    "express-rate-limit": "8.6.2",
+    "helmet": "8.3.0",
+    "jimp": "1.6.1"
   }
 }
