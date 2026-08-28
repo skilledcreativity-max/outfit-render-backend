@@ -23,12 +23,12 @@ jobs:
 
       - name: Commit package lock
         run: |
-          if git diff --quiet -- package-lock.json; then
+          git add package-lock.json
+          if git diff --cached --quiet; then
             echo "package-lock.json is already current."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
           git commit -m "Add package lock"
           git push
