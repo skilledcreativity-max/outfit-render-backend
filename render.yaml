@@ -20,10 +20,16 @@ services:
       - key: RENDER_MAX_REQUESTS_PER_MINUTE
         value: "12"
       - key: RENDER_MAX_CONCURRENT_JOBS
-        value: "1"
-      - key: RENDER_MAX_QUEUE_DEPTH
         value: "4"
+      - key: RENDER_MAX_QUEUE_DEPTH
+        value: "20"
       - key: RENDER_DOWNLOAD_TTL_SECONDS
         value: "300"
       - key: RENDER_MAX_RETAINED_DOWNLOADS
         value: "10"
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_KEY_PREFIX
+        sync: false
