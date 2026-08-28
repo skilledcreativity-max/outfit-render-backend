@@ -1,8 +1,8 @@
 {
   "name": "outfit-render-backend",
-  "version": "2.1.0-beta.1",
+  "version": "2.2.0-beta.1",
   "private": true,
-  "description": "Authenticated, bounded, one-time PNG renderer for the Outfit Studio free beta.",
+  "description": "Authenticated, bounded PNG renderer for Outfit Studio, with optional S3-backed storage for multi-worker deployments.",
   "main": "server.js",
   "engines": {
     "node": ">=22.0.0 <23"
@@ -13,6 +13,8 @@
     "audit": "npm audit --omit=dev --audit-level=high"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.700.0",
+    "@aws-sdk/s3-request-presigner": "^3.700.0",
     "express": "5.2.1",
     "express-rate-limit": "8.6.2",
     "helmet": "8.3.0",
