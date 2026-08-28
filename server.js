@@ -4,7 +4,7 @@ const crypto = require("crypto");
 const express = require("express");
 const helmet = require("helmet");
 const { rateLimit, ipKeyGenerator } = require("express-rate-limit");
-const { renderDesign, sanitizeRenderRequest } = require("./renderer");
+const { renderDesign, sanitizeRenderRequest, warmAssetCache } = require("./renderer");
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_OUTPUT_BYTES = 6 * 1024 * 1024;
@@ -267,6 +267,23 @@ if (require.main === module) {
   const configuration = createConfiguration();
   const app = createApp(configuration);
   const server = app.listen(configuration.port, () => console.log(`Outfit renderer listening on ${configuration.publicBaseUrl}`));
+
+  // Pre-fetch every approved pattern/graphic asset so the first export that
+  // uses one is as fast as a cached one, then keep re-warming on an interval
+  // so the cache never fully expires while this process stays up. This does
+  // not touch Render's free-tier spin-down (a separate, infrastructure-level
+  // delay) — only the Roblox-asset-fetch step inside rendering.
+  const approvedAssetIds = [
+    ...configuration.assetPolicy.approvedPatternAssetIds,
+    ...configuration.assetPolicy.approvedGraphicAssetIds,
+  ];
+  const runWarmup = () => warmAssetCache(approvedAssetIds)
+    .then(() => console.log(`Warmed ${approvedAssetIds.length} pattern/graphic asset(s) into cache.`))
+    .catch((error) => console.warn("Asset cache warm-up failed", error.message));
+  runWarmup();
+  const warmupInterval = setInterval(runWarmup, 45 * 60 * 1000);
+  warmupInterval.unref();
+
   const shutdown = () => server.close(() => process.exit(0));
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
