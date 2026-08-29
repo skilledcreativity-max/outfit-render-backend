@@ -1,13 +1,14 @@
 "use strict";
 
-const { Jimp, JimpMime, cssColorToHex, intToRGBA, rgbaToInt } = require("jimp");
+const { Jimp, JimpMime, loadFont, cssColorToHex, intToRGBA, rgbaToInt } = require("jimp");
 
 const TEMPLATE_WIDTH = 585;
 const TEMPLATE_HEIGHT = 559;
 const MAX_STROKES = 80;
 const MAX_POINTS_PER_STROKE = 120;
-const MAX_SHAPE_WIDTH = 160;
+const MAX_SHAPE_WIDTH = 240;
 const MAX_SHAPE_HEIGHT = 160;
+const MAX_TEXT_LENGTH = 40;
 const MAX_BRUSH_SIZE = 36;
 const MAX_ASSET_ID_LENGTH = 20;
 
@@ -34,18 +35,25 @@ const UV_PANELS = Object.freeze({
 
 const SHAPE_TOOLS = new Set(["Rectangle", "Circle", "Rounded", "Triangle", "Star", "Pentagon", "Hexagon"]);
 const PAINT_TOOLS = new Set(["Brush", "Eraser"]);
+const ALLOWED_FONTS = new Set(["Gotham", "Varsity", "Gothic", "Graffiti", "Pixel", "Script"]);
+
 const REQUEST_FIELDS = new Set(["requestId", "clothingType", "sleeveType", "baseColorHex", "patternAssetId", "graphicAssetId", "graphicRect", "graphicRotation", "drawingStrokes"]);
 const SHAPE_FIELDS = new Set(["tool", "x", "y", "width", "height", "rotation", "colorHex", "patternAssetId"]);
+const TEXT_FIELDS = new Set(["tool", "text", "font", "fontSize", "colorHex", "x", "y", "width", "height", "rotation"]);
 const PAINT_FIELDS = new Set(["tool", "points", "size", "colorHex"]);
 const POINT_FIELDS = new Set(["x", "y"]);
 const GRAPHIC_RECT_FIELDS = new Set(["x", "y", "width", "height"]);
 const ASSET_CACHE = new Map();
-// Approved pattern/graphic assets are curated and rarely change, so a longer
-// TTL (paired with the periodic re-warm in server.js) keeps them cached
-// across the server's whole lifetime instead of re-fetching from Roblox's
-// thumbnail API on every export.
 const ASSET_CACHE_TTL_MS = 60 * 60 * 1000;
 const ASSET_CACHE_LIMIT = 100;
+
+let cachedJimpFont = null;
+async function getJimpFont() {
+  if (!cachedJimpFont) {
+    cachedJimpFont = await loadFont(loadFont.FONT_SANS_32_WHITE);
+  }
+  return cachedJimpFont;
+}
 
 function isFiniteInteger(value) {
   return Number.isSafeInteger(value);
@@ -129,7 +137,7 @@ function findPanelForPoint(panels, x, y, padding = 0) {
 }
 
 function rotatedBoundsFit(panel, shape) {
-  const radians = shape.rotation * Math.PI / 180;
+  const radians = (shape.rotation || 0) * Math.PI / 180;
   const halfWidth = shape.width / 2;
   const halfHeight = shape.height / 2;
   const rotatedHalfWidth = Math.abs(halfWidth * Math.cos(radians)) + Math.abs(halfHeight * Math.sin(radians));
@@ -237,6 +245,37 @@ function drawShape(layer, shape, texture) {
   }
 }
 
+async function drawTextStroke(layer, stroke) {
+  const font = await getJimpFont();
+  const textCanvas = new Jimp({ width: Math.max(1, stroke.width), height: Math.max(1, stroke.height), color: 0x00000000 });
+  
+  textCanvas.print({
+    font,
+    x: 0,
+    y: 0,
+    text: stroke.text,
+    maxWidth: stroke.width,
+  });
+
+  const textColor = cssColorToHex(stroke.colorHex);
+  const textColorRGBA = intToRGBA(textColor);
+
+  for (let y = 0; y < textCanvas.bitmap.height; y += 1) {
+    for (let x = 0; x < textCanvas.bitmap.width; x += 1) {
+      const current = intToRGBA(textCanvas.getPixelColor(x, y));
+      if (current.a > 0) {
+        textCanvas.setPixelColor(rgbaToInt(textColorRGBA.r, textColorRGBA.g, textColorRGBA.b, current.a), x, y);
+      }
+    }
+  }
+
+  if (stroke.rotation !== 0) {
+    textCanvas.rotate({ deg: stroke.rotation, mode: false });
+  }
+
+  layer.composite(textCanvas, stroke.x, stroke.y);
+}
+
 function clearPixel(image, x, y) {
   image.setPixelColor(0x00000000, x, y);
 }
@@ -263,6 +302,30 @@ function drawLine(layer, from, to, radius, colorHex, erase) {
     const t = step / steps;
     drawCircle(layer, Math.round(from.x + (to.x - from.x) * t), Math.round(from.y + (to.y - from.y) * t), radius, colorHex, erase);
   }
+}
+
+function sanitizeTextStroke(raw, panels) {
+  if (!hasOnlyKeys(raw, TEXT_FIELDS)) return null;
+  if (typeof raw.text !== "string" || raw.text.trim().length === 0 || raw.text.length > MAX_TEXT_LENGTH) return null;
+  const font = typeof raw.font === "string" && ALLOWED_FONTS.has(raw.font) ? raw.font : "Gotham";
+  const fields = [raw.x, raw.y, raw.width, raw.height];
+  if (!fields.every(isFiniteInteger) || !isFiniteInteger(raw.rotation || 0) || !isHexColor(raw.colorHex)) return null;
+  if (raw.width < 1 || raw.height < 1 || raw.width > MAX_SHAPE_WIDTH || raw.height > MAX_SHAPE_HEIGHT) return null;
+  if (raw.x < 0 || raw.y < 0 || raw.x + raw.width > TEMPLATE_WIDTH || raw.y + raw.height > TEMPLATE_HEIGHT) return null;
+  const rotation = ((raw.rotation || 0) % 360 + 360) % 360;
+  const textStroke = {
+    tool: "Text",
+    text: raw.text.trim(),
+    font,
+    fontSize: isFiniteInteger(raw.fontSize) ? Math.min(64, Math.max(8, raw.fontSize)) : 14,
+    x: raw.x,
+    y: raw.y,
+    width: raw.width,
+    height: raw.height,
+    rotation,
+    colorHex: raw.colorHex.toUpperCase(),
+  };
+  return panels.some((panel) => rotatedBoundsFit(panel, textStroke)) ? textStroke : null;
 }
 
 function sanitizeShape(raw, panels, approvedPatternAssetIds) {
@@ -320,6 +383,11 @@ function sanitizeRenderRequest(body, assetPolicy = {}) {
   const drawingStrokes = [];
   if (body.drawingStrokes !== undefined && !Array.isArray(body.drawingStrokes)) throw new Error("Invalid artwork collection.");
   for (const rawStroke of (body.drawingStrokes || []).slice(0, MAX_STROKES)) {
+    if (rawStroke && rawStroke.tool === "Text") {
+      const text = sanitizeTextStroke(rawStroke, panels);
+      if (text) drawingStrokes.push(text);
+      continue;
+    }
     const shape = sanitizeShape(rawStroke, panels, approvedPatternAssetIds);
     const paint = shape ? null : sanitizePaintStroke(rawStroke, panels);
     if (shape) drawingStrokes.push(shape); else if (paint) drawingStrokes.push(paint);
@@ -380,17 +448,12 @@ async function fetchRobloxAssetImage(assetId) {
     if (image.bitmap.width > 2048 || image.bitmap.height > 2048) throw new Error("Decoded image exceeds the dimension limit.");
     return image;
   })();
-    const image = await promise;
+  const image = await promise;
   if (ASSET_CACHE.size >= ASSET_CACHE_LIMIT) ASSET_CACHE.delete(ASSET_CACHE.keys().next().value);
   ASSET_CACHE.set(assetId, { image, expiresAt: Date.now() + ASSET_CACHE_TTL_MS });
   return image.clone();
 }
 
-// Pre-fetches a list of asset IDs into ASSET_CACHE so the first export that
-// uses one of them doesn't pay the Roblox thumbnail-API round trip. Called
-// once at server startup and re-called periodically (see server.js) so the
-// cache never goes fully cold while the process stays up. One failed asset
-// never blocks the others.
 async function warmAssetCache(assetIds) {
   const uniqueIds = Array.from(new Set(assetIds)).filter((id) => id);
   await Promise.all(uniqueIds.map(async (assetId) => {
@@ -422,7 +485,7 @@ async function renderDesign(design) {
     }
   }
 
-      if (design.patternAssetId) {
+  if (design.patternAssetId) {
     try {
       const pattern = await fetchRobloxAssetImage(design.patternAssetId);
       pattern.resize({ w: 64, h: 64 });
@@ -440,7 +503,9 @@ async function renderDesign(design) {
 
   await drawGraphic(artworkLayer, design);
   for (const stroke of design.drawingStrokes) {
-    if (SHAPE_TOOLS.has(stroke.tool)) {
+    if (stroke.tool === "Text") {
+      await drawTextStroke(artworkLayer, stroke);
+    } else if (SHAPE_TOOLS.has(stroke.tool)) {
       let texture = null;
       if (stroke.patternAssetId) {
         try {
